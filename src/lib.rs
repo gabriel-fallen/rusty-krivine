@@ -35,21 +35,41 @@ fn level<'a>(e: &Rc<Env<'a>>) -> u32 {
   match **e {
     Nil => 0,
     Env(_, ref p) => level(p),
-    Lift(ref p) => level(p)
+    Lift(ref p) => 1 + level(p)
   } 
 }
 
 
-struct Closure<'a> {
-  term: &'a Box<Term>,
-  env: Rc<Env<'a>>
+enum Closure<'a> {
+  NilClosure(Rc<Env<'a>>),
+  Closure(&'a Box<Term>, Rc<Env<'a>>)
 }
+
+use Closure::*;
 
 impl<'a> Clone for Closure<'a> {
   fn clone(&self) -> Closure<'a> {
-    Closure {
-      term: self.term,
-      env: Rc::clone(&self.env) // FIXME: for this machine we can just transfer ownership
+    match self {
+      NilClosure(ref e) => NilClosure(Rc::clone(e)),// FIXME: for this machine we can just transfer ownership
+      Closure(ref term, ref env) => Closure(
+        term,
+        Rc::clone(env) // FIXME: for this machine we can just transfer ownership
+      )
+    }
+  }
+}
+
+impl<'a> Closure<'a> {
+  fn term(&self) -> &'a Box<Term> {
+    match self {
+      Closure(ref t, _) => t,
+      NilClosure(_) => panic!("NilClosure.term()")
+    }
+  }
+  fn env(&self) -> &Rc<Env<'a>> {
+    match self {
+      Closure(_, env) => env,
+      NilClosure(_) => panic!("NilClosure.term()")
     }
   }
 }
@@ -62,13 +82,24 @@ fn eval_aux<'a, 'b>(t: &'a Box<Term>, e: Rc<Env<'a>>, s: &'b mut Stack<'a>) -> B
   match **t {
     Var(i) => {
       match fetch(i, &e) {
-        Some(closure) => eval_aux(closure.term, Rc::clone(&closure.env), s),
+        Some(closure) => match closure {
+          Closure(term, env) => eval_aux(term, env, s),
+          NilClosure(env) => {
+            // here we unroll `eval_aux(Var(0), Nil, s)`
+            if s.len() == 0 {
+              Box::new(Var(level(&env)))
+            } else {
+              let mut v = Vec::new();
+              s.iter().fold(Box::new(Var(level(&env))), |a, c| Box::new(App(a, eval_aux(c.term(), Rc::clone(c.env()), &mut v))))
+            }
+          }
+        },
         None => {
           if s.len() == 0 {
             Box::new(Var(i + level(&e)))
           } else {
             let mut v = Vec::new();
-            s.iter().fold(Box::new(Var(i)), |a, c| Box::new(App(a, eval_aux(c.term, Rc::clone(&c.env), &mut v))))
+            s.iter().fold(Box::new(Var(i + level(&e))), |a, c| Box::new(App(a, eval_aux(c.term(), Rc::clone(c.env()), &mut v))))
           }
         }
       }
@@ -76,11 +107,11 @@ fn eval_aux<'a, 'b>(t: &'a Box<Term>, e: Rc<Env<'a>>, s: &'b mut Stack<'a>) -> B
     Lam(ref t1) => {
       match s.pop() {
         Some(c) => eval_aux(t1, Rc::new(Env(c, e)), s),
-        None => Box::new(Lam(eval_aux(t1, Rc::new(Lift(e)), s)))
+        None => Box::new(Lam(eval_aux(t1, Rc::new(Env(NilClosure(Rc::new(Nil)), Rc::new(Lift(e)))), s)))
       }
     },
     App(ref u, ref v) => {
-      s.push(Closure{term: v, env: Rc::clone(&e)});
+      s.push(Closure(v, Rc::clone(&e)));
       eval_aux(&u, e, s)
     },
     Free(ref name) => {
@@ -89,7 +120,7 @@ fn eval_aux<'a, 'b>(t: &'a Box<Term>, e: Rc<Env<'a>>, s: &'b mut Stack<'a>) -> B
       } else {
         // foldl (|a, c| App(a, eval_aux(c.term, c.env, Vec::new()))) (Free(name)) s
         let mut v = Vec::new();
-        s.iter().fold(Box::new(Free(name.clone())), |a, c| Box::new(App(a, eval_aux(c.term, Rc::clone(&c.env), &mut v))))
+        s.iter().fold(Box::new(Free(name.clone())), |a, c| Box::new(App(a, eval_aux(c.term(), Rc::clone(c.env()), &mut v))))
       }
     }
   }
@@ -106,12 +137,11 @@ fn fetch<'a, 'b>(i: u32, e: &'b Rc<Env<'a>>) -> Option<Closure<'a>> {
       }
     },
     Lift(ref p) => {
-      if i == 0 {
-        None
-      } else {
-        match fetch(i, p) {
-          Some(c) => Some(Closure {term: c.term, env: c.env}),
-          None => None
+      match fetch(i, p) {
+        None => None,
+        Some(c) => match c {
+          Closure(term, env) => Some(Closure(term, Rc::new(Lift(env)))),
+          NilClosure(env) => Some(NilClosure(Rc::new(Lift(env))))
         }
       }
     }

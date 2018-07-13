@@ -13,7 +13,8 @@ fn main() {
   let id = Lam(Box::new(Var(0)));
   println!("{}", to_string(&id));
   let c2 = church(2);
+  println!("{}", to_string(&c2));
   let c3 = church(3);
-  let c8 = eval(&Box::new(App(c2, c3)));
+  let c8 = eval(&Box::new(App(c3, c2)));
   println!("{}", to_string(&c8));
 }
