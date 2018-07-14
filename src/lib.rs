@@ -11,6 +11,20 @@ pub enum Term {
 
 use Term::*;
 
+// Smart constructors
+
+pub fn var(n: u32) -> Box<Term> {
+  Box::new(Var(n))
+}
+
+pub fn lam(t: Box<Term>) -> Box<Term> {
+  Box::new(Lam(t))
+}
+
+pub fn app(u: Box<Term>, v: Box<Term>) -> Box<Term> {
+  Box::new(App(u, v))
+}
+
 pub fn to_string(t: &Term) -> String {
   match t {
     Var(i) => i.to_string(),
@@ -87,19 +101,17 @@ fn eval_aux<'a, 'b>(t: &'a Box<Term>, e: Rc<Env<'a>>, s: &'b mut Stack<'a>) -> B
           NilClosure(env) => {
             // here we unroll `eval_aux(Var(0), Nil, s)`
             if s.len() == 0 {
-              Box::new(Var(level(&env)))
+              var(level(&env))
             } else {
-              let mut v = Vec::new();
-              s.iter().fold(Box::new(Var(level(&env))), |a, c| Box::new(App(a, eval_aux(c.term(), Rc::clone(c.env()), &mut v))))
+              s.iter().rev().fold(var(level(&env)), |a, c| app(a, eval_aux(c.term(), Rc::clone(c.env()), &mut Vec::new())))
             }
           }
         },
         None => {
           if s.len() == 0 {
-            Box::new(Var(i + level(&e)))
+            var(i + level(&e))
           } else {
-            let mut v = Vec::new();
-            s.iter().fold(Box::new(Var(i + level(&e))), |a, c| Box::new(App(a, eval_aux(c.term(), Rc::clone(c.env()), &mut v))))
+            s.iter().rev().fold(var(i + level(&e)), |a, c| app(a, eval_aux(c.term(), Rc::clone(c.env()), &mut Vec::new())))
           }
         }
       }
@@ -107,7 +119,7 @@ fn eval_aux<'a, 'b>(t: &'a Box<Term>, e: Rc<Env<'a>>, s: &'b mut Stack<'a>) -> B
     Lam(ref t1) => {
       match s.pop() {
         Some(c) => eval_aux(t1, Rc::new(Env(c, e)), s),
-        None => Box::new(Lam(eval_aux(t1, Rc::new(Env(NilClosure(Rc::new(Nil)), Rc::new(Lift(e)))), s)))
+        None => lam(eval_aux(t1, Rc::new(Env(NilClosure(Rc::new(Nil)), Rc::new(Lift(e)))), s))
       }
     },
     App(ref u, ref v) => {
@@ -119,8 +131,7 @@ fn eval_aux<'a, 'b>(t: &'a Box<Term>, e: Rc<Env<'a>>, s: &'b mut Stack<'a>) -> B
         Box::new(Free(name.clone())) // FIXME: can we reuse `t` here?
       } else {
         // foldl (|a, c| App(a, eval_aux(c.term, c.env, Vec::new()))) (Free(name)) s
-        let mut v = Vec::new();
-        s.iter().fold(Box::new(Free(name.clone())), |a, c| Box::new(App(a, eval_aux(c.term(), Rc::clone(c.env()), &mut v))))
+        s.iter().rev().fold(Box::new(Free(name.clone())), |a, c| app(a, eval_aux(c.term(), Rc::clone(c.env()), &mut Vec::new())))
       }
     }
   }
