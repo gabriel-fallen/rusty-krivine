@@ -1,5 +1,7 @@
 extern crate rusty;
 
+use std::thread;
+
 use rusty::*;
 use Term::*;
 
@@ -24,6 +26,11 @@ fn main() {
   // let c3 = church(3);
   // let c8 = eval(&app(c3, c2));
   // println!("{}", to_string(&c8));
-  let nm23 = eval(&nmpair(2, 3));
-  println!("{}", to_string(&nm23));
+
+  let child = thread::Builder::new().stack_size(1024 * 1024 * 1024).spawn(move || {
+        return eval(&nmpair(7, 6));
+    }).unwrap();
+  let _nm = child.join().unwrap();
+  // println!("{}", to_string(&nm)); // no need to print it to evaluate it, it's an eager language
+  println!("Done!");
 }
