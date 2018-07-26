@@ -51,7 +51,7 @@ fn main() {
   //   });
   // println!("{}", to_string(&nm)); // no need to print it to evaluate it, it's an eager language
   let _klmn = run(move || {
-        return eval(&klmn(7, 8, 6, 7));
+        return eval(klmn(7, 6, 6, 7));
     });
   println!("Done!");
 }

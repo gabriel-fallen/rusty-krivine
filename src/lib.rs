@@ -2,6 +2,7 @@
 
 use std::rc::Rc;
 
+#[derive(Clone)]
 pub enum Term {
   Var(u32),
   Lam(Box<Term>),
@@ -34,18 +35,16 @@ pub fn to_string(t: &Term) -> String {
   }
 }
 
-// Let's fix certain names for particular lifetimes.
-// Let `'a` denote a lifetime of original lambda-term (the longest lifetime)
 
-enum Env<'a> {
+enum Env {
   Nil,
-  Env(Closure<'a>, Rc<Env<'a>>),
-  Lift(Rc<Env<'a>>)
+  Env(Closure, Rc<Env>),
+  Lift(Rc<Env>)
 }
 
 use Env::*;
 
-fn level<'a>(e: &Rc<Env<'a>>) -> u32 {
+fn level(e: &Rc<Env>) -> u32 {
   match **e {
     Nil => 0,
     Env(_, ref p) => level(p),
@@ -54,47 +53,31 @@ fn level<'a>(e: &Rc<Env<'a>>) -> u32 {
 }
 
 
-enum Closure<'a> {
-  NilClosure(Rc<Env<'a>>),
-  Closure(&'a Box<Term>, Rc<Env<'a>>)
+enum Closure {
+  NilClosure(Rc<Env>),
+  Closure(Box<Term>, Rc<Env>)
 }
 
 use Closure::*;
 
-impl<'a> Clone for Closure<'a> {
-  fn clone(&self) -> Closure<'a> {
+impl Clone for Closure {
+  fn clone(&self) -> Closure {
     match self {
       NilClosure(ref e) => NilClosure(Rc::clone(e)),// FIXME: for this machine we can just transfer ownership
-      Closure(ref term, ref env) => Closure(
-        term,
+      Closure(term, env) => Closure(
+        term.clone(),
         Rc::clone(env) // FIXME: for this machine we can just transfer ownership
       )
     }
   }
 }
 
-impl<'a> Closure<'a> {
-  fn term(&self) -> &'a Box<Term> {
-    match self {
-      Closure(ref t, _) => t,
-      NilClosure(_) => panic!("NilClosure.term()")
-    }
-  }
-  fn env(&self) -> &Rc<Env<'a>> {
-    match self {
-      Closure(_, env) => env,
-      NilClosure(_) => panic!("NilClosure.term()")
-    }
-  }
-}
+type Stack = Vec<Closure>;
 
 
-type Stack<'a> = Vec<Closure<'a>>;
-
-
-fn eval_aux<'a, 'b>(mut t: &'a Box<Term>, mut e: Rc<Env<'a>>, s: &'b mut Stack<'a>) -> Box<Term> {
+fn eval_aux<'a, 'b>(mut t: Box<Term>, mut e: Rc<Env>, s: &'b mut Stack) -> Box<Term> {
   loop {
-    match **t {
+    match {*t} {
       Var(i) => {
         match fetch(i, &e) {
           Some(closure) => match closure {
@@ -109,7 +92,14 @@ fn eval_aux<'a, 'b>(mut t: &'a Box<Term>, mut e: Rc<Env<'a>>, s: &'b mut Stack<'
               if s.len() == 0 {
                 return var(level(&env))
               } else {
-                return s.iter().rev().fold(var(level(&env)), |a, c| app(a, eval_aux(c.term(), Rc::clone(c.env()), &mut Vec::new())))
+                return s.drain(..).rev().fold(var(level(&env)), |a, c| {
+                  if let Closure(term, env) = c {
+                    // app(a, eval_aux(term, Rc::clone(env), &mut Vec::new())) // FIXME: do we still need Rc::clone here?
+                    app(a, eval_aux(term, env, &mut Vec::new()))
+                  } else {
+                    panic!("NilClosure!")
+                  }
+                })
               }
             }
           },
@@ -117,12 +107,19 @@ fn eval_aux<'a, 'b>(mut t: &'a Box<Term>, mut e: Rc<Env<'a>>, s: &'b mut Stack<'
             if s.len() == 0 {
               return var(i + level(&e))
             } else {
-              return s.iter().rev().fold(var(i + level(&e)), |a, c| app(a, eval_aux(c.term(), Rc::clone(c.env()), &mut Vec::new())))
+              return s.drain(..).rev().fold(var(i + level(&e)), |a, c| {
+                if let Closure(term, env) = c {
+                  // app(a, eval_aux(term, Rc::clone(env), &mut Vec::new())) // FIXME: do we still need Rc::clone here?
+                  app(a, eval_aux(term, env, &mut Vec::new()))
+                } else {
+                  panic!("NilClosure!")
+                }
+              })
             }
           }
         }
       },
-      Lam(ref t1) => {
+      Lam(t1) => {
         match s.pop() {
           Some(c) => {
             // eval_aux(t1, Rc::new(Env(c, e)), s)
@@ -133,25 +130,32 @@ fn eval_aux<'a, 'b>(mut t: &'a Box<Term>, mut e: Rc<Env<'a>>, s: &'b mut Stack<'
           None => return lam(eval_aux(t1, Rc::new(Env(NilClosure(Rc::new(Nil)), Rc::new(Lift(e)))), s))
         }
       },
-      App(ref u, ref v) => {
+      App(u, v) => {
         s.push(Closure(v, Rc::clone(&e)));
         // eval_aux(&u, e, s)
-        t = &u;
+        t = u;
         continue;
       },
-      Free(ref name) => {
+      Free(name) => {
         if s.len() == 0 {
-          return Box::new(Free(name.clone())) // FIXME: can we reuse `t` here?
+          return Box::new(Free(name)) // FIXME: can we reuse `t` here?
         } else {
           // foldl (|a, c| App(a, eval_aux(c.term, c.env, Vec::new()))) (Free(name)) s
-          return s.iter().rev().fold(Box::new(Free(name.clone())), |a, c| app(a, eval_aux(c.term(), Rc::clone(c.env()), &mut Vec::new())))
+          return s.drain(..).rev().fold(Box::new(Free(name)), |a, c| {
+            if let Closure(term, env) = c {
+              // app(a, eval_aux(term, Rc::clone(env), &mut Vec::new())) // FIXME: do we still need Rc::clone here?
+              app(a, eval_aux(term, env, &mut Vec::new()))
+            } else {
+              panic!("NilClosure!")
+            }
+          })
         }
       }
     }
   }
 }
 
-fn fetch<'a, 'b>(i: u32, e: &'b Rc<Env<'a>>) -> Option<Closure<'a>> {
+fn fetch<'b>(i: u32, e: &'b Rc<Env>) -> Option<Closure> {
   match **e {
     Nil => None,
     Env(ref c, ref p) => {
@@ -173,7 +177,7 @@ fn fetch<'a, 'b>(i: u32, e: &'b Rc<Env<'a>>) -> Option<Closure<'a>> {
   }
 }
 
-pub fn eval(t: &Box<Term>) -> Box<Term> {
+pub fn eval(t: Box<Term>) -> Box<Term> {
   let mut s = Vec::new();
   eval_aux(t, Rc::new(Nil), &mut s)
 }
