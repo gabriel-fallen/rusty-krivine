@@ -92,46 +92,60 @@ impl<'a> Closure<'a> {
 type Stack<'a> = Vec<Closure<'a>>;
 
 
-fn eval_aux<'a, 'b>(t: &'a Box<Term>, e: Rc<Env<'a>>, s: &'b mut Stack<'a>) -> Box<Term> {
-  match **t {
-    Var(i) => {
-      match fetch(i, &e) {
-        Some(closure) => match closure {
-          Closure(term, env) => eval_aux(term, env, s),
-          NilClosure(env) => {
-            // here we unroll `eval_aux(Var(0), Nil, s)`
+fn eval_aux<'a, 'b>(mut t: &'a Box<Term>, mut e: Rc<Env<'a>>, s: &'b mut Stack<'a>) -> Box<Term> {
+  loop {
+    match **t {
+      Var(i) => {
+        match fetch(i, &e) {
+          Some(closure) => match closure {
+            Closure(term, env) => {
+              // eval_aux(term, env, s)
+              t = term;
+              e = env;
+              continue;
+            },
+            NilClosure(env) => {
+              // here we unroll `eval_aux(Var(0), Nil, s)`
+              if s.len() == 0 {
+                return var(level(&env))
+              } else {
+                return s.iter().rev().fold(var(level(&env)), |a, c| app(a, eval_aux(c.term(), Rc::clone(c.env()), &mut Vec::new())))
+              }
+            }
+          },
+          None => {
             if s.len() == 0 {
-              var(level(&env))
+              return var(i + level(&e))
             } else {
-              s.iter().rev().fold(var(level(&env)), |a, c| app(a, eval_aux(c.term(), Rc::clone(c.env()), &mut Vec::new())))
+              return s.iter().rev().fold(var(i + level(&e)), |a, c| app(a, eval_aux(c.term(), Rc::clone(c.env()), &mut Vec::new())))
             }
           }
-        },
-        None => {
-          if s.len() == 0 {
-            var(i + level(&e))
-          } else {
-            s.iter().rev().fold(var(i + level(&e)), |a, c| app(a, eval_aux(c.term(), Rc::clone(c.env()), &mut Vec::new())))
-          }
         }
-      }
-    },
-    Lam(ref t1) => {
-      match s.pop() {
-        Some(c) => eval_aux(t1, Rc::new(Env(c, e)), s),
-        None => lam(eval_aux(t1, Rc::new(Env(NilClosure(Rc::new(Nil)), Rc::new(Lift(e)))), s))
-      }
-    },
-    App(ref u, ref v) => {
-      s.push(Closure(v, Rc::clone(&e)));
-      eval_aux(&u, e, s)
-    },
-    Free(ref name) => {
-      if s.len() == 0 {
-        Box::new(Free(name.clone())) // FIXME: can we reuse `t` here?
-      } else {
-        // foldl (|a, c| App(a, eval_aux(c.term, c.env, Vec::new()))) (Free(name)) s
-        s.iter().rev().fold(Box::new(Free(name.clone())), |a, c| app(a, eval_aux(c.term(), Rc::clone(c.env()), &mut Vec::new())))
+      },
+      Lam(ref t1) => {
+        match s.pop() {
+          Some(c) => {
+            // eval_aux(t1, Rc::new(Env(c, e)), s)
+            t = t1;
+            e = Rc::new(Env(c, e));
+            continue;
+          },
+          None => return lam(eval_aux(t1, Rc::new(Env(NilClosure(Rc::new(Nil)), Rc::new(Lift(e)))), s))
+        }
+      },
+      App(ref u, ref v) => {
+        s.push(Closure(v, Rc::clone(&e)));
+        // eval_aux(&u, e, s)
+        t = &u;
+        continue;
+      },
+      Free(ref name) => {
+        if s.len() == 0 {
+          return Box::new(Free(name.clone())) // FIXME: can we reuse `t` here?
+        } else {
+          // foldl (|a, c| App(a, eval_aux(c.term, c.env, Vec::new()))) (Free(name)) s
+          return s.iter().rev().fold(Box::new(Free(name.clone())), |a, c| app(a, eval_aux(c.term(), Rc::clone(c.env()), &mut Vec::new())))
+        }
       }
     }
   }
