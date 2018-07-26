@@ -33,7 +33,7 @@ fn klmn(k: u8, l: u8, m: u8, n: u8) -> Box<Term> {
 fn run<T, F>(f: F) -> T
   where T: 'static + Send,
         F: 'static + Fn() -> T + Send {
-  let child = thread::Builder::new().stack_size(1024 * 1024 * 1024).spawn(f).unwrap();
+  let child = thread::Builder::new().stack_size(2048 * 1024 * 1024).spawn(f).unwrap();
   return child.join().unwrap();
 }
 
@@ -51,7 +51,7 @@ fn main() {
   //   });
   // println!("{}", to_string(&nm)); // no need to print it to evaluate it, it's an eager language
   let _klmn = run(move || {
-        return eval(&klmn(7, 6, 6, 7));
+        return eval(&klmn(7, 8, 6, 7));
     });
   println!("Done!");
 }
